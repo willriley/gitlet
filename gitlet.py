@@ -1,27 +1,19 @@
 import sys
-import hashlib
-import os
-import gzip
-import shutil
-
-def add_blob(file_name):
-    # add blob to data store
-    import pdb; pdb.set_trace()
-    sha = hashlib.sha1(file_name).hexdigest()
-    if os.path.exists(sha):
-        print file_name, "already backed up."
-    else:
-        with open(file_name, 'rb') as f_in, gzip.open(sha, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
-
-def add(args):
-    pass
+from commands import add, init, rm
 
 if __name__ == '__main__':
     commands = {
-        'add': add_blob,
+        'init': init, # works
+        'add': add,
+        'rm': rm
     }
 
-    a, b = sys.argv[1], sys.argv[2]
-    if a in commands:
-        commands[a](b)
+    if len(sys.argv) < 2:
+        print "Please enter a command."
+        sys.exit(1)
+
+    command, command_args = sys.argv[1], sys.argv[2:]
+    if command in commands:
+        commands[command](command_args)
+    else:
+        print "No command with that name exists."
