@@ -1,11 +1,10 @@
 import os
 import pdb
-from fileutils import add_object, get_last_commit, get_sha
-from commit import Commit, Stage
+from fileutils import add_object, get_last_commit, get_sha, list_files, get_abs_branch_path, get_last_commit_id
+from objects import Commit, Stage, branch_iterator
 
 
 def add(args):
-    pdb.set_trace()
     filename = os.path.abspath(args[0])
     if not os.path.exists(filename):
         print "File doesn't exist."
@@ -31,7 +30,6 @@ def add(args):
 
 
 def rm(args):
-    pdb.set_trace()
     path = os.path.abspath(args[0])
     stage = Stage.from_index_file()
     _, last_commit = get_last_commit()
@@ -47,9 +45,7 @@ def rm(args):
         stage.rm.add(path)
         stage.to_index_file()
 
-
 def init(args):
-    pdb.set_trace()
     if os.path.exists('.gitlet'):
         print "A gitlet version-control system already exists in the current directory."
         return
@@ -64,29 +60,26 @@ def init(args):
             if not os.path.isdir(path):
                 raise OSError('Error initializing gitlet repo.')
 
-    # create initial commit
-    initial_commit = Commit(parent_id=None, message="initial commit")
-    # change to initial_commit.commit()?
-    commit_id = initial_commit.commit()
-
-    # mark init commit's id as the master branch's last commit
     master_branch_path = os.path.abspath('.gitlet/refs/heads/master')
-    with open(master_branch_path, 'w') as f:
-        f.write(commit_id)
-
     # mark master branch as the current branch
     head_path = os.path.abspath('.gitlet/HEAD')
     with open(head_path, 'w') as f:
         f.write(master_branch_path)
+
+    # create initial commit and set as last commit in master branch
+    initial_commit = Commit(parent_id=None, message="initial commit")
+    initial_commit.commit()
 
     # create blank staging area for future changes
     Stage.blank().to_index_file()
 
 
 def commit(args):
-    # add optparser shit
-    # support -m (then -am)
+    # add argparse shit to support -m (then -am)
+    if not args:
+        print "Please enter a commit message."
 
+    message = args[0]
     last_commit_id, last_commit = get_last_commit()
     stage = Stage.from_index_file()
 
@@ -102,9 +95,60 @@ def commit(args):
     for file in stage.rm:
         filemap.pop(file, None)
 
+    # save commit info and point current branch to it
     next_commit = Commit(last_commit_id, message, filemap)
-
-    # update head pointer
+    next_commit.commit()
 
     # clear staging area
     Stage.blank().to_index_file()
+
+def log(args):
+    for id, commit in branch_iterator():
+        commit.pretty_print(id)
+
+def branch(args):
+    branch_path = get_abs_branch_path(args[0])
+    if os.path.exists(branch_path):
+        print "A branch with that name already exists."
+    else:
+        head_commit = get_last_commit_id()
+        with open(branch_path, 'w') as f:
+            f.write(head_commit)
+
+def rm_branch(args):
+    branch_path = get_abs_branch_path(args[0])
+    if os.path.exists(branch_path):
+        print "A branch with that name already exists."
+    elif branch_path == get_current_branch_path():
+        print "Cannot remove the current branch."
+    else:
+        os.remove(branch_path)
+
+
+def status(args):
+    def print_status(labels_to_files):
+        for label, files in labels_to_files.items():
+            print "=== {} ===".format(label)
+            for file in files:
+                print file
+            print ""
+
+
+
+    index = Stage.from_index_file()
+
+    files = list_files()
+    staged, removed = index.add, index.rm
+
+    files.difference_update(staged, removed)
+
+    # figure out if files were modified/deleted later
+    # figure out untracked files later
+
+    print_status({
+        'Branches': get_branches(),
+        'Staged Files': [os.path.relpath(f) for f in staged.keys()],
+        'Removed Files': [os.path.relpath(f) for f in removed],
+        'Unstaged Changes': unstaged,
+        'Untracked Files': untracked,
+    })

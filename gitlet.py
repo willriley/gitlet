@@ -1,11 +1,13 @@
 import sys
-from commands import add, init, rm
+from commands import add, init, rm, commit, log
 
 if __name__ == '__main__':
     commands = {
-        'init': init, # works
+        'init': init,
         'add': add,
-        'rm': rm
+        'rm': rm,
+        'commit': commit,
+        'log': log,
     }
 
     if len(sys.argv) < 2:
