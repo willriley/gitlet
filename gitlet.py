@@ -1,5 +1,5 @@
 import sys
-from commands import add, init, rm, commit, log
+from commands import add, init, rm, commit, log, branch, rm_branch, checkout
 
 if __name__ == '__main__':
     commands = {
@@ -8,6 +8,9 @@ if __name__ == '__main__':
         'rm': rm,
         'commit': commit,
         'log': log,
+        'branch': branch,
+        'rm-branch': rm_branch,
+        'checkout': checkout,
     }
 
     if len(sys.argv) < 2:

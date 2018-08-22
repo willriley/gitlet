@@ -6,14 +6,26 @@ import shutil
 
 BUF_SIZE = 65536
 
-def add_object(path, sha):
-    backup_path = os.path.abspath('.gitlet/objects/' + sha)
+def add_blob(path, sha):
+    backup_path = get_abs_blob_path(sha)
     if not os.path.exists(backup_path):
         with open(path, 'rb') as f_in, gzip.open(backup_path, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
 
+def copy_blob(path, sha):
+    blob_path = get_abs_blob_path(sha)
+    with gzip.open(blob_path, 'rb') as blob, open(path, 'w') as file:
+        while True:
+            data = blob.read(BUF_SIZE)
+            if not data:
+                break
+            file.write(data)
+
 def get_abs_branch_path(branch_name):
     return os.path.abspath('.gitlet/refs/heads/{}'.format(branch_name))
+
+def get_abs_blob_path(blob_name):
+    return os.path.abspath('.gitlet/objects/{}'.format(blob_name))
 
 def get_current_branch_path():
     head = os.path.abspath('.gitlet/HEAD')
@@ -27,7 +39,7 @@ def get_last_commit_id():
 
 def get_last_commit():
     cid = get_last_commit_id()
-    commit = os.path.abspath('.gitlet/objects/' + cid)
+    commit = get_abs_blob_path(cid)
     with open(commit) as f:
         last_commit = pickle.load(f)
     return cid, last_commit

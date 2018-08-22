@@ -1,6 +1,6 @@
 import os
 import datetime
-from fileutils import get_current_branch_path
+from fileutils import get_current_branch_path, get_abs_blob_path
 import hashlib
 import cPickle as pickle
 
@@ -15,7 +15,7 @@ class Commit:
     def commit(self):
         data = pickle.dumps(self)
         id = hashlib.sha1(data).hexdigest()
-        path = os.path.abspath('.gitlet/objects/' + id)
+        path = get_abs_blob_path(id)
 
         # serialize commit info
         with open(path, 'wb') as f:
@@ -28,7 +28,7 @@ class Commit:
 
     @staticmethod
     def from_id(id):
-        path = os.path.abspath('.gitlet/objects/' + id)
+        path = get_abs_blob_path(id)
         with open(path) as f:
             commit = pickle.load(f)
         return commit

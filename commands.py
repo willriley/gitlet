@@ -1,6 +1,6 @@
 import os
 import pdb
-from fileutils import add_object, get_last_commit, get_sha, list_files, get_abs_branch_path, get_last_commit_id
+from fileutils import add_blob, copy_blob, get_last_commit, get_sha, list_files, get_abs_branch_path, get_current_branch_path, get_last_commit_id
 from objects import Commit, Stage, branch_iterator
 
 
@@ -26,7 +26,7 @@ def add(args):
     stage.add[filename] = sha
     stage.to_index_file()
 
-    add_object(filename, sha)
+    add_blob(filename, sha)
 
 
 def rm(args):
@@ -60,7 +60,7 @@ def init(args):
             if not os.path.isdir(path):
                 raise OSError('Error initializing gitlet repo.')
 
-    master_branch_path = os.path.abspath('.gitlet/refs/heads/master')
+    master_branch_path = get_abs_branch_path('master')
     # mark master branch as the current branch
     head_path = os.path.abspath('.gitlet/HEAD')
     with open(head_path, 'w') as f:
@@ -106,7 +106,16 @@ def log(args):
     for id, commit in branch_iterator():
         commit.pretty_print(id)
 
+def global_log(args):
+    # set of seen commit ids (or even timestamps)
+    # loop thru all branches
+    # iterate thru each branch
+    pass
+
+
+
 def branch(args):
+    pdb.set_trace()
     branch_path = get_abs_branch_path(args[0])
     if os.path.exists(branch_path):
         print "A branch with that name already exists."
@@ -116,13 +125,53 @@ def branch(args):
             f.write(head_commit)
 
 def rm_branch(args):
+    pdb.set_trace()
     branch_path = get_abs_branch_path(args[0])
-    if os.path.exists(branch_path):
-        print "A branch with that name already exists."
+    if not os.path.exists(branch_path):
+        print "A branch with that name doesn't exist."
     elif branch_path == get_current_branch_path():
         print "Cannot remove the current branch."
     else:
         os.remove(branch_path)
+
+
+def checkout_file(file, sha):
+    # overwrites contents of file to have those pointed to by sha
+    copy_blob(file, sha)
+
+    # unstage file
+    stage = Stage.from_index_file()
+    if file in stage.rm:
+        stage.rm.remove(file)
+    stage.add.pop(file, None)
+    stage.to_index_file()
+
+
+def checkout(args):
+    pdb.set_trace()
+    # add argparser
+    file = os.path.abspath(args[0])
+    _, last_commit = get_last_commit()
+
+    if file not in last_commit.filemap:
+        print "File doesn't exist in that commit."
+    else:
+        checkout_file(file, last_commit.filemap[file])
+
+def checkoutt(args):
+    pdb.set_trace()
+    # add argparser
+    commit_id, file = args[0], os.path.abspath(args[1])
+    try:
+        commit = Commit.from_id(commit_id)
+    except:
+        print "No commit with that id exists."
+        return
+
+    if file not in commit.filemap:
+        print "File doesn't exist in that commit."
+    else:
+        checkout_file(file, commit.filemap[file])
 
 
 def status(args):
