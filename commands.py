@@ -1,11 +1,12 @@
 import os
 import pdb
+from collections import OrderedDict
 from fileutils import add_blob, copy_blob, get_last_commit, get_sha, list_files, get_abs_branch_path, get_current_branch_path, get_last_commit_id
 from objects import Commit, Stage, branch_iterator
 
 
 def add(args):
-    filename = os.path.abspath(args[0])
+    filename = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
     if not os.path.exists(filename):
         print "File doesn't exist."
         return
@@ -30,20 +31,20 @@ def add(args):
 
 
 def rm(args):
-    path = os.path.abspath(args[0])
+    pdb.set_trace()
+    file = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
     stage = Stage.from_index_file()
     _, last_commit = get_last_commit()
 
-    if not os.path.exists(path):
-        print "File doesn't exist"
-    elif path in stage.rm:
-        return
-    elif path not in stage.add and path not in last_commit.filemap:
+    if file in last_commit.filemap:
+        os.remove(file)
+    elif file not in stage.add:
         print "No reason to remove the file."
-    else:
-        stage.add.pop(path, None)
-        stage.rm.add(path)
-        stage.to_index_file()
+        return
+
+    stage.add.pop(file, None)
+    stage.rm.add(file)
+    stage.to_index_file()
 
 def init(args):
     if os.path.exists('.gitlet'):
@@ -95,6 +96,7 @@ def commit(args):
     for file in stage.rm:
         filemap.pop(file, None)
 
+    pdb.set_trace()
     # save commit info and point current branch to it
     next_commit = Commit(last_commit_id, message, filemap)
     next_commit.commit()
@@ -150,7 +152,7 @@ def checkout_file(file, sha):
 def checkout(args):
     pdb.set_trace()
     # add argparser
-    file = os.path.abspath(args[0])
+    file = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
     _, last_commit = get_last_commit()
 
     if file not in last_commit.filemap:
@@ -161,7 +163,8 @@ def checkout(args):
 def checkoutt(args):
     pdb.set_trace()
     # add argparser
-    commit_id, file = args[0], os.path.abspath(args[1])
+    commit_id = args[0]
+    file = args[1] if os.path.isabs(args[1]) else os.path.abspath(args[1])
     try:
         commit = Commit.from_id(commit_id)
     except:
@@ -174,30 +177,50 @@ def checkoutt(args):
         checkout_file(file, commit.filemap[file])
 
 
+def list_branches():
+    branches = os.listdir(os.path.abspath('.gitlet/refs/heads'))
+    curr_branch = os.path.basename(get_current_branch_path())
+    return [b if b != curr_branch else '*' + b for b in branches]
+
+
+def list_unstaged(last_commit, stage, working_directory):
+    unstaged, untracked = [], []
+    all_files = working_directory.union(last_commit, stage.add)
+    for file in all_files:
+        path = os.path.relpath(file)
+
+        if file in working_directory:
+            sha = get_sha(file)
+            if (
+                (file in stage.add and sha != stage.add[file]) or
+                (file in last_commit and sha != last_commit[file])
+            ):
+                unstaged.append('{} (modified)'.format(path))
+            elif file not in stage.add and file not in stage.rm:
+                untracked.append(path)
+        elif file in stage.add or (file not in stage.rm and file in last_commit):
+            unstaged.append('{} (deleted)'.format(path))
+
+    return unstaged, untracked
+
+
 def status(args):
     def print_status(labels_to_files):
-        for label, files in labels_to_files.items():
-            print "=== {} ===".format(label)
-            for file in files:
-                print file
-            print ""
-
-
+        print '\n'.join(
+            ['\n'.join(["=== {} ===".format(label)] + files + [''])
+                for label, files in labels_to_files.items()]
+        )
 
     index = Stage.from_index_file()
-
-    files = list_files()
     staged, removed = index.add, index.rm
+    _, last_commit = get_last_commit()
 
-    files.difference_update(staged, removed)
+    unstaged, untracked = list_unstaged(last_commit.filemap, index, list_files())
 
-    # figure out if files were modified/deleted later
-    # figure out untracked files later
-
-    print_status({
-        'Branches': get_branches(),
-        'Staged Files': [os.path.relpath(f) for f in staged.keys()],
-        'Removed Files': [os.path.relpath(f) for f in removed],
-        'Unstaged Changes': unstaged,
-        'Untracked Files': untracked,
-    })
+    print_status(OrderedDict([
+        ('Branches', list_branches()),
+        ('Staged Files', [os.path.relpath(f) for f in staged.keys()]),
+        ('Removed Files', [os.path.relpath(f) for f in removed]),
+        ('Unstaged Changes', unstaged),
+        ('Untracked Files', untracked),
+    ]))

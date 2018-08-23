@@ -63,6 +63,3 @@ def list_files():
         dirs[:] = [dir for dir in dirs if not dir.startswith('.')]
         total.update([os.path.join(path, file) for file in files])
     return total
-
-def determine_modification(filename):
-    pass
