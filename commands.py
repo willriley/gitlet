@@ -1,140 +1,237 @@
 import os
 import pdb
 from collections import OrderedDict
-from fileutils import add_blob, copy_blob, get_last_commit, get_sha, list_files, get_abs_branch_path, get_current_branch_path, get_last_commit_id
-from objects import Commit, Stage, branch_iterator
+from util import *
+from itertools import izip_longest
+from objects import *
 
 
 def add(args):
-    filename = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
-    if not os.path.exists(filename):
-        print "File doesn't exist."
+    """
+    Stages a file for the next commit. Fails if that file doesn't
+    exist or is unchanged from the previous commit.
+    """
+    file = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
+    if not os.path.isfile(file):
+        print "Error: no file named {}.".format(file)
         return
 
-    # maybe use buffer for larger files to limit memory usage?
-    sha = get_sha(filename)
-    _, last_commit = get_last_commit()
-
-    # current working version identical to last commit's; don't stage
-    if (filename in last_commit.filemap and
-        last_commit.filemap[filename] == sha):
-        return
-
-    # update staging area
-    stage = Stage.from_index_file()
-    if filename in stage.rm:
-        stage.rm.remove(filename)
-    stage.add[filename] = sha
-    stage.to_index_file()
-
-    add_blob(filename, sha)
+    # update staging area; add blob to object store
+    index, sha = Commit.index(), get_sha(file)
+    index.filemap[file] = sha
+    index.set_index()
+    add_blob(file, sha)
 
 
 def rm(args):
-    pdb.set_trace()
-    file = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
-    stage = Stage.from_index_file()
-    _, last_commit = get_last_commit()
+    """
+    Removes a file from the index, or from the working directory
+    and the index.
 
-    if file in last_commit.filemap:
-        os.remove(file)
-    elif file not in stage.add:
-        print "No reason to remove the file."
+    Fails if the file has updates staged in the index, if
+    the file differs from its version at the HEAD, or if
+    the file is not in the index.
+    """
+    file = args[0] if os.path.isabs(args[0]) else os.path.abspath(args[0])
+    index = Commit.index()
+
+    if file not in index.filemap:
+        print "Error: pathspec {} did not match any files".format(file)
         return
 
-    stage.add.pop(file, None)
-    stage.rm.add(file)
-    stage.to_index_file()
+    if os.path.exists(file):
+        last_commit = Commit.last()
+        old_sha, sha = last_commit.filemap.get(file), get_sha(file)
+
+        # don't remove file if it has updates in the index, or if it
+        # differs from its version at the HEAD; otherwise remove it
+        if (index.filemap.get(file) != sha or old_sha != sha):
+            print "Error: file has staged/unstaged changes"
+            return
+        os.remove(file)
+
+    # remove from index and update index to disk
+    del index.filemap[file]
+    index.set_index()
+
 
 def init(args):
+    """
+    Initializes a gitlet repository.
+    """
     if os.path.exists('.gitlet'):
-        print "A gitlet version-control system already exists in the current directory."
+        print "Error: a gitlet version-control system already exists in the current directory."
         return
 
     # set up .gitlet directory structure
     subdirs = ['objects', 'refs/heads']
     for subdir in subdirs:
         path = os.path.abspath('.gitlet/' + subdir)
-        try:
-            os.makedirs(path)
-        except OSError:
-            if not os.path.isdir(path):
-                raise OSError('Error initializing gitlet repo.')
+        os.makedirs(path)
 
-    master_branch_path = get_abs_branch_path('master')
     # mark master branch as the current branch
-    head_path = os.path.abspath('.gitlet/HEAD')
-    with open(head_path, 'w') as f:
-        f.write(master_branch_path)
+    Branch.set_head('master')
 
     # create initial commit and set as last commit in master branch
-    initial_commit = Commit(parent_id=None, message="initial commit")
-    initial_commit.commit()
+    init_commit = Commit(parent_id=None)
+    init_commit.commit("initial commit")
 
     # create blank staging area for future changes
-    Stage.blank().to_index_file()
+    stage = Commit(init_commit.id, dict(init_commit.filemap))
+    stage.set_index()
 
 
 def commit(args):
-    # add argparse shit to support -m (then -am)
-    if not args:
-        print "Please enter a commit message."
-
-    message = args[0]
-    last_commit_id, last_commit = get_last_commit()
-    stage = Stage.from_index_file()
-
-    if not stage.add and not stage.rm:
-        print "No changes added to the commit."
+    """
+    Commits the staging area to the current branch, then clears
+    the staging area for future commits. Fails if the staging
+    area is empty or if no commit message is specified.
+    """
+    message, last_commit, curr_commit = args[0], Commit.last(), Commit.index()
+    if last_commit.filemap == curr_commit.filemap:
+        print "Nothing to commit."
         return
 
-    # start with parent commit's files
-    filemap = dict(last_commit.filemap)
-    # add in the staged files
-    filemap.update(stage.add)
-    # ...and account for the removed ones, too
-    for file in stage.rm:
-        filemap.pop(file, None)
+    curr_commit.commit(message)
+    index = Commit(curr_commit.id, dict(curr_commit.filemap))
+    index.set_index()
 
-    pdb.set_trace()
-    # save commit info and point current branch to it
-    next_commit = Commit(last_commit_id, message, filemap)
-    next_commit.commit()
-
-    # clear staging area
-    Stage.blank().to_index_file()
 
 def log(args):
-    for id, commit in branch_iterator():
-        commit.pretty_print(id)
+    """
+    Prints info about all the commits in the current branch.
+    """
+    print "\n".join(str(commit) for commit in Branch())
+
 
 def global_log(args):
-    # set of seen commit ids (or even timestamps)
-    # loop thru all branches
-    # iterate thru each branch
-    pass
-
+    """
+    Prints info about all the commits in the repo, done in no
+    guaranteed order.
+    """
+    seen, branch_dir = set(), os.path.abspath('.gitlet/refs/heads')
+    branches = (os.path.join(branch_dir, b) for b in os.listdir(branch_dir))
+    for branch_path in branches:
+        for commit in Branch(path=branch_path):
+            if commit.id not in seen:
+                print commit
+                seen.add(commit.id)
 
 
 def branch(args):
-    pdb.set_trace()
-    branch_path = get_abs_branch_path(args[0])
+    """
+    Creates a new branch and sets it to be the new HEAD.
+    """
+    branch_path = Branch.abspath(args[0])
     if os.path.exists(branch_path):
         print "A branch with that name already exists."
     else:
-        head_commit = get_last_commit_id()
+        # sets last commit of new branch
+        head_commit_id = Commit.last_id()
         with open(branch_path, 'w') as f:
-            f.write(head_commit)
+            f.write(head_commit_id)
+
+        # sets new branch to be HEAD
+        Branch.set_head(branch_path)
+
 
 def rm_branch(args):
-    pdb.set_trace()
-    branch_path = get_abs_branch_path(args[0])
+    """
+    Removes the head of a branch.
+    """
+    branch_path = Branch.abspath(args[0])
     if not os.path.exists(branch_path):
         print "A branch with that name doesn't exist."
-    elif branch_path == get_current_branch_path():
+    elif branch_path == Branch.current_path():
         print "Cannot remove the current branch."
     else:
         os.remove(branch_path)
+
+
+def status(args):
+    # diff btwn last commit and index
+    # gives you "changes to be committed"
+    last, index = Commit.last().filemap, Commit.index().filemap
+    s_last, s_index = set(last), set(index)
+
+    new, deleted = s_index - s_last, s_last - s_index
+    modified = [f for f, sha in index.items() if f in last and last[f] != sha]
+
+    # diff btwn index and working directory
+    # gives you "changes not staged for commit" and "untracked files"
+    work_tree = get_work_tree()
+    s_tree = set(work_tree)
+
+    unstaged_deleted, untracked = s_index - s_tree, s_tree - s_index
+    unstaged_modified = [
+        f for f,
+        sha in work_tree.items() if f in index and index[f] != sha]
+
+    import pdb; pdb.set_trace()
+    print_status(OrderedDict([
+        ('Branches:', Branch.all()),
+        ('Changes to be committed:', zip_labels([modified, deleted, new])),
+        ('Changes not staged for commit:', zip_labels([unstaged_modified, unstaged_deleted])),
+        ('Untracked files:', ['\t' + os.path.relpath(f) for f in untracked])
+    ]))
+
+
+def reset(args):
+    id = args[0]
+    try:
+        commit = Commit.from_id(id)
+        prev_stage = Stage.from_index_file()
+
+        Stage.blank().to_index_file()
+        if restore_commit(commit):
+            # set commit as head of current branch
+            set_branch_head_commit(id)
+        else:
+            # restore stage if reset fails
+            prev_stage.to_index_file()
+    except BaseException:
+        print "No commit with that id exists."
+
+
+def checkout_file(file, commit_id):
+    """
+    Overwrite's a file's contents to match those from a specific
+    commit. If the file was marked for removal in the stage, this command unmarks it. Finally, this command adds the changes to
+    the stage, unless the file is checked out to its state in the
+    previous commit.
+
+    Fails if the commit is invalid, or the file doesn't exist
+    in the specified commit.
+    """
+    commit = Commit.from_id(commit_id)
+    if not commit:
+        print "Invalid commit specified"
+    elif file not in commit.filemap:
+        print "{} does not exist in commit {}".format(file, commit_id)
+    else:
+        # restores file to its state in commit_id
+        copy_blob(file, commit.filemap[file])
+
+        stage = Stage.from_index_file()
+        # if file was marked for removal, unmark it
+        stage.rm.discard(file)
+
+    # overwrites working directory, not stage
+    # clears it from the stage
+
+    # 1) checkout file to its state in the commit
+    # at the head of the branch
+    # usage: git checkout -- <filename>
+
+    # 2) checkout file to its state in the given commit
+    # automatically adds it
+    # usage: git checkout <cid> -- <filename>
+
+    # 3) checks out all files in the working directory
+    # to their versions in the commit at head of the
+    # given branch, and makes that branch the new
+    # current branch.
+    # usage: git checkout <branch> or git checkout -b <branch>
 
 
 def checkout_file(file, sha):
@@ -160,14 +257,16 @@ def checkout(args):
     else:
         checkout_file(file, last_commit.filemap[file])
 
+
 def checkoutt(args):
+
     pdb.set_trace()
     # add argparser
     commit_id = args[0]
     file = args[1] if os.path.isabs(args[1]) else os.path.abspath(args[1])
     try:
         commit = Commit.from_id(commit_id)
-    except:
+    except BaseException:
         print "No commit with that id exists."
         return
 
@@ -177,50 +276,117 @@ def checkoutt(args):
         checkout_file(file, commit.filemap[file])
 
 
-def list_branches():
-    branches = os.listdir(os.path.abspath('.gitlet/refs/heads'))
-    curr_branch = os.path.basename(get_current_branch_path())
-    return [b if b != curr_branch else '*' + b for b in branches]
-
-
-def list_unstaged(last_commit, stage, working_directory):
-    unstaged, untracked = [], []
-    all_files = working_directory.union(last_commit, stage.add)
-    for file in all_files:
-        path = os.path.relpath(file)
-
-        if file in working_directory:
-            sha = get_sha(file)
-            if (
-                (file in stage.add and sha != stage.add[file]) or
-                (file in last_commit and sha != last_commit[file])
-            ):
-                unstaged.append('{} (modified)'.format(path))
-            elif file not in stage.add and file not in stage.rm:
-                untracked.append(path)
-        elif file in stage.add or (file not in stage.rm and file in last_commit):
-            unstaged.append('{} (deleted)'.format(path))
-
-    return unstaged, untracked
-
-
-def status(args):
-    def print_status(labels_to_files):
-        print '\n'.join(
-            ['\n'.join(["=== {} ===".format(label)] + files + [''])
-                for label, files in labels_to_files.items()]
-        )
-
-    index = Stage.from_index_file()
-    staged, removed = index.add, index.rm
+def restore_commit(restored_commit, checkout=lambda *args: True):
     _, last_commit = get_last_commit()
+    stage, untracked = Stage.from_index_file(), []
+    pdb.set_trace()
+    # check if there are untracked files in current branch
+    # that would be overwritten/deleted
+    for file in restored_commit.filemap:
+        if (
+            file not in last_commit.filemap and
+            file not in stage.add and
+            os.path.exists(file)
+        ):
+            untracked.append(file)
 
-    unstaged, untracked = list_unstaged(last_commit.filemap, index, list_files())
+    if untracked:
+        print "The following file(s) are untracked:"
+        for f in untracked:
+            print f
+        print "Please add or delete them before resetting."
+        return False
 
-    print_status(OrderedDict([
-        ('Branches', list_branches()),
-        ('Staged Files', [os.path.relpath(f) for f in staged.keys()]),
-        ('Removed Files', [os.path.relpath(f) for f in removed]),
-        ('Unstaged Changes', unstaged),
-        ('Untracked Files', untracked),
-    ]))
+    for file, sha in restored_commit.filemap.items():
+        if checkout(file, sha, stage, last_commit.filemap):
+            checkout_file(file, sha)
+
+    for file in last_commit.filemap:
+        if file not in restored_commit.filemap:
+            try:
+                os.remove(file)
+            except OSError:
+                pass
+
+    return True
+
+
+def checkout_file_condition(file, sha, stage, last_commit_files):
+    return (
+        file not in stage.add and
+        file not in stage.rm and
+        (file not in last_commit_files or sha != last_commit_files[file])
+    )
+
+
+def checkout_branch(args):
+    branch, branch_path = args[0], get_abs_branch_path(args[0])
+    if not os.path.exists(branch_path):
+        print "No such branch exists."
+    elif branch_path == get_current_branch_path():
+        print "No need to checkout the current branch."
+    else:
+        with open(branch_path) as f:
+            branch_head_commit = Commit.from_id(f.read())
+
+        if restore_commit(
+                branch_head_commit,
+                checkout=checkout_file_condition):
+            # set new branch to be the head
+            set_head(branch)
+
+
+def get_split_point(branch_a, branch_b):
+    seen = set()
+    for commit_a, commit_b in izip_longest(
+            branch_iterator(branch_a), branch_iterator(branch_b)):
+        for commit in [commit_a, commit_b]:
+            if commit:
+                if commit[0] in seen:
+                    return commit[0]
+                seen.add(commit[0])
+    return None
+
+
+def merge(args):
+    other_branch, curr_branch = get_abs_branch_path(
+        args[0]), get_current_branch_path()
+
+    if not os.path.exists(other_branch):
+        print "A branch with that name doesn't exist."
+    elif other_branch == curr_branch:
+        print "Cannot merge a branch with itself."
+    else:
+        stage = Stage.from_index_file()
+        if stage.add or stage.rm:
+            print "You have uncommitted changes."
+            return
+
+        last_cid, last_commit = get_last_commit()
+        branch_head_cid = get_last_commit_id(other_branch)
+
+        split_point_cid = get_split_point(curr_branch, other_branch)
+        if split_point_cid == branch_head_cid:
+            print "Given branch is an ancestor of the current branch."
+        elif split_point == last_cid:
+            reset([branch_head_cid])
+            print "Current branch fast-forwarded."
+        else:
+            branch_head_commit = Commit.from_id(branch_head_cid)
+            split_point_commit = Commit.from_id(split_point_cid)
+
+            # checkout and stage files that were in the split point
+            # and were MODIFIED in the other branch but UNMODIFIED in the
+            # current branch
+
+            # don't touch files that were in the split point but were
+            # only modified in the current branch
+
+            # don't touch files that weren't in the split point but
+            # are now only in the current branch
+
+            # check out and stage files that weren't in split point but
+            # are now only in the other branch
+
+            # for file, sha in branch_head_commit.filemap.items():
+            #     if file in split_point_commit.filemap
