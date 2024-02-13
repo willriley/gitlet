@@ -1,1 +1,13 @@
-Mini version of git.
+Mini version of git. Supports the following commands:
+- 'init'
+- 'add'
+- 'rm'
+- 'commit'
+- 'log'
+- 'branch'
+- 'rm-branch'
+- 'checkout'
+- 'cb'
+- 'status'
+- 'global-log'
+- 'reset'
